@@ -10,6 +10,7 @@ import threading
 import queue
 import multiprocessing
 from moviepy.editor import VideoFileClip, AudioFileClip
+import platform
 
 cv2.ocl.setUseOpenCL(True)
 

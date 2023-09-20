@@ -265,7 +265,10 @@ def start_preview():
 # Create the main GUI window
 root = tk.Tk()
 root.title("Bytecrush - Video Upscaler and Enhancer")
-root.iconbitmap('favicon.ico')
+# fixed issue with platform dependency
+if platform.system() == 'Windows':
+    # Your Windows-specific code here
+    root.iconbitmap('favicon.ico')
 
 style = ttk.Style()
 

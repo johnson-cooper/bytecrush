@@ -11,34 +11,88 @@ import queue
 import multiprocessing
 from moviepy.editor import VideoFileClip, AudioFileClip
 import platform
+import subprocess
+import os
+
 
 cv2.ocl.setUseOpenCL(True)
 
 
-def upscale_and_enhance_video(input_path, output_path, scale_factor, sharpen_intensity, denoise_strength, deinterlace_strength):
+
+
+# Function for RealESRGAN-based upscaling
+def upscale_with_realesrgan(temp_images, output_path, outscale, realesrgan_options):
     try:
-        # Open the input video file
-        cap = cv2.VideoCapture(input_path)
+        cmd = [
+            "python", "inference_realesrgan.py",
+            "-n", realesrgan_options["model_name"],
+            "-i", temp_images,
+            "-o", output_path,
+            "--outscale", str(outscale),
+            "--fp32"
+        ]
 
-        # Get the original video's frame width and height
-        frame_width = int(cap.get(3))
-        frame_height = int(cap.get(4))
+        # Add other options
+        for option, value in realesrgan_options.items():
+            if option not in ["model_name"]:
+                cmd.append(f"--{option}")
+                if value is not None:
+                    cmd.append(str(value))
 
-        # Calculate the new frame dimensions after upscaling
-        new_width = int(frame_width * scale_factor)
-        new_height = int(frame_height * scale_factor)
+        subprocess.run(cmd, check=True)
 
-        # Define the codec for video
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, 30.0, (new_width, new_height))
+        print("RealESRGAN upscaling complete. Output saved as", output_path)
 
-        # Calculate the total number of frames in the video
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    except Exception as e:
+        print("An error occurred during RealESRGAN upscaling:", str(e))
+        
 
-        # Create a tqdm progress bar
-        progress_bar = tqdm(total=total_frames, desc="Processing Frames", unit="frame")
 
-        # Loop through the frames of the input video
+def upscale_and_enhance_video(input_path, output_path, temp_upscaled_images_path, scale_factor, sharpen_intensity, denoise_strength, outscale_value=2, realesrgan_options=None):
+    
+    try:
+        if realesrgan_options is not None:
+            # Apply RealESRGAN upscaling
+            
+            upscale_with_realesrgan(temp_upscaled_images_path, outscale_value, realesrgan_options)
+
+            # Load the upscaled image using OpenCV
+            upscaled_image = cv2.imread(temp_upscaled_images_path)
+
+            # Initialize the video writer with the upscaled image dimensions
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, 30.0, (upscaled_image.shape[1], upscaled_image.shape[0]))
+
+            # Release the temporary image
+            cv2.destroyAllWindows()
+
+        else:
+            if scale_factor is None or scale_factor <= 0:
+                raise ValueError("Scale factor must be specified and greater than 0 when RealESRGAN is disabled.")
+
+            else:
+            # Open the input video file
+                cap = cv2.VideoCapture(input_path)
+
+                # Get the original video's frame width and height
+                frame_width = int(cap.get(3))
+                frame_height = int(cap.get(4))
+
+                # Calculate the new frame dimensions after upscaling
+                new_width = int(frame_width * scale_factor)
+                new_height = int(frame_height * scale_factor)
+
+                # Define the codec for video
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(output_path, fourcc, 30.0, (new_width, new_height))
+
+                # Calculate the total number of frames in the video
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+                # Create a tqdm progress bar
+                progress_bar = tqdm(total=total_frames, desc="Processing Frames", unit="frame")
+
+            # Loop through the frames of the input video
         while True:
             ret, frame = cap.read()
 
@@ -52,12 +106,8 @@ def upscale_and_enhance_video(input_path, output_path, scale_factor, sharpen_int
                 frame = cv2.filter2D(frame, -1, kernel)
 
             # Apply deinterlacing with user-defined strength
-            if deinterlace_strength > 0:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV)
-                frame[:, :, 1] = cv2.equalizeHist(frame[:, :, 1])
-                frame[:, :, 2] = cv2.equalizeHist(frame[:, :, 2])
-                frame = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR)
-
+            
+            
             # Resize the frame to the new dimensions
             resized_frame = cv2.resize(frame, (new_width, new_height))
 
@@ -81,14 +131,71 @@ def upscale_and_enhance_video(input_path, output_path, scale_factor, sharpen_int
 
 
 
+from tqdm import tqdm
+
+def create_images_from_video(input_video_path, output_image_folder):
+    try:
+        # Open the input video file
+        cap = cv2.VideoCapture(input_video_path)
+        frame_number = 0
+
+        # Calculate the total number of frames in the video
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        # Create a tqdm progress bar
+        progress_bar = tqdm(total=total_frames, desc="Creating Images", unit="frame")
+
+        while True:
+            ret, frame = cap.read()
+
+            if not ret:
+                break
+
+            # Save the frame as an image in the output image folder
+            image_filename = f"frame_{frame_number:04d}.png"
+            image_path = os.path.join(output_image_folder, image_filename)
+            cv2.imwrite(image_path, frame)
+
+            frame_number += 1
+
+            # Update the progress bar
+            progress_bar.update(1)
+
+        cap.release()
+        progress_bar.close()
+
+        print("Images created from video frames. Images saved in", output_image_folder)
+
+    except Exception as e:
+        print("An error occurred during image creation:", str(e))
+
+# Example usage:
+
+output_image_folder = "temp_images"  # Replace with the folder where you want to save the images
+
+# Create the image folder if it doesn't exist
+os.makedirs(output_image_folder, exist_ok=True)
+
+
+
+
+
+
+
 def upscale_button_click():
     input_video_path = input_path_var.get()
+    create_images_from_video(input_video_path, output_image_folder)
     temp_video_path = "temp_video.mp4"  # Temporary video file
-    output_video_path = output_path_var.get()
-    scale_factor = float(scale_factor_entry.get())
+    temp_compiledvideo_path="temp2.mp4"
+    output_video_path = output_path_var.get()  # Use the specified output path
+    scale_factor_str = scale_factor_entry.get()  # Get the scale factor as a string
     sharpen_intensity = sharpen_intensity_scale.get()
     denoise_strength = denoise_strength_scale.get()
-    deinterlace_strength = deinterlace_strength_scale.get()
+
+    
+
+    # Check if RealESRGAN upscaling is enabled
+    use_realesrgan = realesrgan_checkbox.get()
 
     # Check if the "Use Multithreading" checkbox is selected
     use_multithreading = multithreading_checkbox.get()
@@ -96,20 +203,111 @@ def upscale_button_click():
     # Determine the number of threads based on the user's choice
     num_threads = multiprocessing.cpu_count() if use_multithreading else 1
 
-    try:
-        # Start video processing with or without multithreading based on user choice
-        if use_multithreading:
-            upscale_and_enhance_video_multithreaded(input_video_path, temp_video_path, scale_factor, sharpen_intensity, denoise_strength, deinterlace_strength, num_threads)
-        else:
-            upscale_and_enhance_video(input_video_path, temp_video_path, scale_factor, sharpen_intensity, denoise_strength, deinterlace_strength)
+    # Define RealESRGAN options
+    realesrgan_options = None
+    if use_realesrgan:
+        realesrgan_options = {
+            "model_name": "realesr-general-x4v3",  # You can change the model name as needed
+            "suffix": "out",
+            "ext": "auto"
+        }
 
-        # Add audio to the processed video and save the final output
-        add_audio_to_video(input_video_path, temp_video_path, output_video_path)
+    # Define scale_factor outside the if-else block with a default value of 1
+    scale_factor = 1
+
+    try:
+        if not use_realesrgan:
+            # If RealESRGAN is not enabled, parse the scale factor
+            scale_factor = float(scale_factor_str)  # Convert the string to a float
+
+        # Get the selected outscale value from the dropdown menu
+        outscale_value = "2"
+
+        if use_realesrgan:
+            # Use a temporary path for the RealESRGAN upscaled video
+            temp_upscaled_images_path = "temp_upscaled_images"
+            os.makedirs(temp_upscaled_images_path, exist_ok=True)
+            upscale_with_realesrgan(output_image_folder, temp_upscaled_images_path, outscale_value, realesrgan_options)
+
+            # Compile the upscaled images back into a video using OpenCV
+            compile_images_to_video(temp_upscaled_images_path, temp_compiledvideo_path)
+            add_audio_to_video(input_video_path, temp_compiledvideo_path, output_video_path)
+
+        if os.path.exists(temp_compiledvideo_path):
+            os.remove(temp_compiledvideo_path)
+            print("Temporary compiled video deleted:", temp_compiledvideo_path)
+        else:
+            
+            upscale_and_enhance_video(input_video_path, output_video_path, temp_video_path, scale_factor, sharpen_intensity, denoise_strength)
+
+        # Add audio to the upscaled video and save it to the final output path
+            add_audio_to_video(input_video_path, temp_video_path, output_video_path)
+        
+            
+
+    except ValueError as ve:
+        print("ValueError:", str(ve))
     except Exception as e:
         print("An error occurred:", str(e))
 
+          # Clean up: Remove the temporary images
+    clean_temp_images(output_image_folder)
+
+# Function to clean up temporary images in the given folder
+def clean_temp_images(folder_path):
+    try:
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        print("Temporary images in", folder_path, "have been deleted.")
+    except Exception as e:
+        print("An error occurred while cleaning up temporary images:", str(e))
+
+def compile_images_to_video(temp_upscaled_images_path, temp_compiledvideo_path):
+    try:
+        # Get a list of image file names in the directory
+        image_files = sorted([os.path.join(temp_upscaled_images_path, img) for img in os.listdir(temp_upscaled_images_path) if img.endswith(('.jpg', '.jpeg', '.png'))])
+
+        if not image_files:
+            raise Exception("No upscaled images found in the directory.")
+
+        # Read the first image to get dimensions
+        first_image = cv2.imread(image_files[0])
+        height, width, layers = first_image.shape
+
+        # Define the codec and create a VideoWriter object
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(temp_compiledvideo_path, fourcc, 30.0, (width, height))
+
+        # Create a tqdm progress bar
+        progress_bar = tqdm(total=len(image_files), desc="Compiling Video", unit="frame")
+
+        # Write the images to the video
+        for image_file in image_files:
+            frame = cv2.imread(image_file)
+            out.write(frame)
+            progress_bar.update(1)
+
+        # Close the progress bar
+        progress_bar.close()
+
+        # Release the video writer
+        out.release()
+
+        # Clean up: Remove the temporary images
+        for image_file in image_files:
+            os.remove(image_file)
+
+        print("Images compiled into a video. Output saved as", temp_compiledvideo_path)
+
+    except Exception as e:
+        print("An error occurred during image compilation:", str(e))
+
+     
+
 # New function for multithreaded video processing
-def upscale_and_enhance_video_multithreaded(input_path, output_path, scale_factor, sharpen_intensity, denoise_strength, deinterlace_strength, num_threads):
+def upscale_and_enhance_video_multithreaded(input_path, output_path, scale_factor, sharpen_intensity, denoise_strength, num_threads):
     try:
         # Open the input video file
         cap = cv2.VideoCapture(input_path)
@@ -150,13 +348,7 @@ def upscale_and_enhance_video_multithreaded(input_path, output_path, scale_facto
 
             
 
-                # Apply deinterlacing with user-defined strength
-                if deinterlace_strength > 0:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV)
-                    frame[:, :, 1] = cv2.equalizeHist(frame[:, :, 1])
-                    frame[:, :, 2] = cv2.equalizeHist(frame[:, :, 2])
-                    frame = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR)
-
+              
                 # Resize the frame to the new dimensions
                 resized_frame = cv2.resize(frame, (new_width, new_height))
 
@@ -243,11 +435,7 @@ def update_preview():
                 frame = cv2.filter2D(frame, -1, kernel)
             if denoise_strength_scale.get() > 0:
                 frame = cv2.fastNlMeansDenoisingColored(frame, None, denoise_strength_scale.get(), 10, 7, 21)
-            if deinterlace_strength_scale.get() > 0:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV)
-                frame[:, :, 1] = cv2.equalizeHist(frame[:, :, 1])
-                frame[:, :, 2] = cv2.equalizeHist(frame[:, :, 2])
-                frame = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR)
+           
             # Convert the frame to RGB for displaying in Tkinter
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             photo = ImageTk.PhotoImage(image=Image.fromarray(frame_rgb))
@@ -298,10 +486,14 @@ try:
     form_frame = tk.Frame(root)
     form_frame.pack(side="left", padx=20, pady=10)
 
+ 
+
     # Create a Label widget for the video preview
     preview_label = tk.Label(form_frame)
     preview_label.pack(side="right", padx=20, pady=10)
 
+
+   
     # Input video path File Dialog button
     input_path_label = tk.Label(form_frame, text="Select Input Video:", fg='#1e1e1e', bg='white')
     input_path_label.pack()
@@ -352,16 +544,18 @@ try:
     denoise_strength_scale.set(0)  # Default value
     denoise_strength_scale.pack(fill="x")
 
-    # Deinterlace strength slider
-    deinterlace_strength_label = tk.Label(form_frame, text="Deinterlace Strength", fg='#1e1e1e', bg='white')
-    deinterlace_strength_label.pack(anchor="w")
-    deinterlace_strength_scale = ttk.Scale(form_frame, from_=0, to=10, orient="horizontal")
-    deinterlace_strength_scale.set(0)  # Default value
-    deinterlace_strength_scale.pack(fill="x")
+   
 
     # Upscale button
     upscale_button = tk.Button(form_frame, text="Upscale and Enhance Video", command=upscale_button_click)
     upscale_button.pack()
+
+    #checkbox for esrgan
+    realesrgan_checkbox = tk.BooleanVar()
+    realesrgan_checkbox.set(False)  # Default to disabled
+    realesrgan_checkbox_button = tk.Checkbutton(form_frame, text="Enable RealESRGAN Upscaling", variable=realesrgan_checkbox)
+    realesrgan_checkbox_button.pack()
+
 
     # Create a "Use Multithreading" checkbox
     multithreading_checkbox = tk.BooleanVar()
